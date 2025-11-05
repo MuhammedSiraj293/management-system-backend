@@ -18,79 +18,55 @@ import logger from "../../config/logger.js";
  * @returns {object} Normalized lead data.
  */
 const normalizeElementorPayload = (body) => {
-  const { form_name, form_fields } = body || {};
-  let fields = form_fields || body || {};
+  if (!body) return {};
 
-  // ✅ Handle case where form_fields is an array (Elementor default)
+  let fields = body.form_fields || body.fields || body || {};
+
+  // Handle array-of-objects (default Elementor)
   if (Array.isArray(fields)) {
     const flat = {};
-    for (const field of fields) {
-      const key = field?.id || field?.name;
-      if (key && field?.value !== undefined) {
-        flat[key] = field.value;
-      }
+    for (const f of fields) {
+      const key = f?.id || f?.name || f?.field_name;
+      if (key && f?.value !== undefined) flat[key] = f.value;
     }
     fields = flat;
   }
 
-  let name = null;
-  let email = null;
-  let phone = null;
-  const utm = {};
-
-  const phoneRegex = /^[\+]?[0-9\s\-]{7,15}$/;
-
-  for (const key in fields) {
-    const lowerKey = key.toLowerCase();
-    const value = String(fields[key]).trim();
-
-    if (!value) continue;
-
-    // Standard fields
-    if (lowerKey === "name" && !name) name = value;
-    else if (lowerKey === "email" && !email) email = value;
-    else if (lowerKey === "phone" && !phone) phone = value;
-    // Common Elementor variations
-    else if (
-      (lowerKey.includes("full_name") || lowerKey.includes("your-name")) &&
-      !name
-    )
-      name = value;
-    else if (
-      (lowerKey.includes("email") ||
-        lowerKey.includes("e-mail") ||
-        lowerKey.includes("your-email")) &&
-      !email
-    )
-      email = value;
-    else if (
-      (lowerKey.includes("phone") ||
-        lowerKey.includes("tel") ||
-        lowerKey.includes("mobile") ||
-        lowerKey.includes("your-phone")) &&
-      !phone
-    )
-      phone = value;
-    // Fallback: auto-detect phone numbers
-    else if (!phone && value.match(phoneRegex)) phone = value;
-    // Capture UTM parameters
-    else if (lowerKey.startsWith("utm_"))
-      utm[lowerKey.replace("utm_", "")] = value;
+  // Handle nested structure (like { body: { form_fields: [...] } })
+  if (fields.form_fields && Array.isArray(fields.form_fields)) {
+    const flat = {};
+    for (const f of fields.form_fields) {
+      const key = f?.id || f?.name;
+      if (key && f?.value !== undefined) flat[key] = f.value;
+    }
+    fields = flat;
   }
 
-  // Fallback for first_name / last_name pattern
-  if (!name && (fields.first_name || fields.last_name)) {
-    name = `${fields.first_name || ""} ${fields.last_name || ""}`.trim();
+  const phoneRegex = /^[\+]?[0-9\s\-]{7,15}$/;
+  let name = null, email = null, phone = null, utm = {};
+
+  for (const key in fields) {
+    const lower = key.toLowerCase();
+    const value = String(fields[key] ?? "").trim();
+    if (!value) continue;
+
+    if (lower.includes("name") && !name) name = value;
+    if (lower.includes("email") && !email) email = value;
+    if ((lower.includes("phone") || lower.includes("tel") || lower.includes("mobile")) && !phone)
+      phone = value;
+    if (!phone && value.match(phoneRegex)) phone = value;
+    if (lower.startsWith("utm_")) utm[lower.replace("utm_", "")] = value;
   }
 
   return {
     name,
     email,
     phone,
-    formName: form_name || "N/A",
+    formName: body.form_name || "N/A",
     utm,
   };
 };
+
 
 /**
  * Handles incoming Elementor Pro Form webhooks.
