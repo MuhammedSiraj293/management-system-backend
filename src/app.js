@@ -19,7 +19,7 @@ import { errorHandler, notFoundHandler } from './middlewares/errorHandler.js';
 // --- Initialize Express App ---
 const app = express();
 // --- CORS Configuration ---
-const VERCEL_URL = 'https://management-system-capave.vercel.app/';
+const VERCEL_URL = 'https://management-system-capave.vercel.app';
 // --- Core Middlewares ---
 app.use(cors({
   origin: [VERCEL_URL, 'http://localhost:5173'], // Allow Vercel and local dev
