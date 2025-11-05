@@ -120,7 +120,7 @@ const leadSchema = new Schema(
 // As per your plan, this creates a 'timestampUae' field dynamically
 // by adding 4 hours to the UTC timestamp.
 leadSchema.virtual('timestampUae').get(function () {
-  if (!this.timestampUtc) {
+  if (!this.timestampUtc) { 
     return null;
   }
   const uaeTime = new Date(this.timestampUtc.getTime() + 4 * 60 * 60 * 1000);
@@ -133,12 +133,12 @@ leadSchema.index({ sourceId: 1 });
 leadSchema.index({ status: 1, createdAt: -1 }); // For the worker to find jobs
 leadSchema.index({ createdAt: -1 }); // For sorting the main lead table
 
-// --- ADD THIS NEW VALIDATION RULE ---
-// This runs before any .save() command.
-// It checks if *both* phone and email are missing.
+// --- THIS IS THE NEW VALIDATION RULE ---
+// This rule runs before any .save() command.
+// It will stop the save ONLY if *both* phone and email are missing.
 leadSchema.pre('validate', function(next) {
   if (!this.phone && !this.email) {
-    // If both are missing, stop the save and send an error
+    // If both are missing, send an error
     next(new Error('A lead must have at least a phone number or an email.'));
   } else {
     // If at least one is present, continue.
