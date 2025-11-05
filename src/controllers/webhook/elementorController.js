@@ -11,29 +11,23 @@ import {
 import logger from "../../config/logger.js";
 
 /**
- * Normalizes the incoming payload from an Elementor form.
- * Handles both array and object styles of `form_fields`.
+ * Normalize Elementor webhook payload
+ * Handles both array-style and object-style field formats.
  *
  * @param {object} body - The raw req.body from Elementor.
- * @returns {object} A normalized lead data object.
+ * @returns {object} Normalized lead data.
  */
 const normalizeElementorPayload = (body) => {
   const { form_name, form_fields } = body || {};
-
-  // Elementor can send either:
-  // 1. { form_fields: { email: "a@b.com", phone: "123" } }
-  // 2. { form_fields: [ { id: "email", value: "a@b.com" }, ... ] }
-  // 3. Flat payload (no form_fields key)
   let fields = form_fields || body || {};
 
-  // --- Handle array structure ---
+  // ✅ Handle case where form_fields is an array (Elementor default)
   if (Array.isArray(fields)) {
     const flat = {};
     for (const field of fields) {
-      if (field?.id && field?.value !== undefined) {
-        flat[field.id] = field.value;
-      } else if (field?.name && field?.value !== undefined) {
-        flat[field.name] = field.value;
+      const key = field?.id || field?.name;
+      if (key && field?.value !== undefined) {
+        flat[key] = field.value;
       }
     }
     fields = flat;
@@ -42,60 +36,49 @@ const normalizeElementorPayload = (body) => {
   let name = null;
   let email = null;
   let phone = null;
-  let utm = {};
+  const utm = {};
 
   const phoneRegex = /^[\+]?[0-9\s\-]{7,15}$/;
 
   for (const key in fields) {
     const lowerKey = key.toLowerCase();
-    const value = typeof fields[key] === "string" ? fields[key].trim() : "";
+    const value = String(fields[key]).trim();
 
     if (!value) continue;
 
     // Standard fields
-    if (lowerKey === "name" && !name) {
-      name = value;
-    } else if (lowerKey === "email" && !email) {
-      email = value;
-    } else if (lowerKey === "phone" && !phone) {
-      phone = value;
-    }
-
+    if (lowerKey === "name" && !name) name = value;
+    else if (lowerKey === "email" && !email) email = value;
+    else if (lowerKey === "phone" && !phone) phone = value;
     // Common Elementor variations
     else if (
       (lowerKey.includes("full_name") || lowerKey.includes("your-name")) &&
       !name
-    ) {
+    )
       name = value;
-    } else if (
+    else if (
       (lowerKey.includes("email") ||
         lowerKey.includes("e-mail") ||
         lowerKey.includes("your-email")) &&
       !email
-    ) {
+    )
       email = value;
-    } else if (
+    else if (
       (lowerKey.includes("phone") ||
         lowerKey.includes("tel") ||
-        lowerKey.includes("your-phone") ||
-        lowerKey.includes("mobile")) &&
+        lowerKey.includes("mobile") ||
+        lowerKey.includes("your-phone")) &&
       !phone
-    ) {
+    )
       phone = value;
-    }
-
-    // Fallback — auto-detect phone numbers in any random field
-    else if (!phone && value.match(phoneRegex)) {
-      phone = value;
-    }
-
-    // Capture UTM tags
-    else if (lowerKey.startsWith("utm_")) {
+    // Fallback: auto-detect phone numbers
+    else if (!phone && value.match(phoneRegex)) phone = value;
+    // Capture UTM parameters
+    else if (lowerKey.startsWith("utm_"))
       utm[lowerKey.replace("utm_", "")] = value;
-    }
   }
 
-  // Fallback for first_name / last_name combo
+  // Fallback for first_name / last_name pattern
   if (!name && (fields.first_name || fields.last_name)) {
     name = `${fields.first_name || ""} ${fields.last_name || ""}`.trim();
   }
@@ -110,33 +93,35 @@ const normalizeElementorPayload = (body) => {
 };
 
 /**
- * Handles incoming webhooks from Elementor Pro Forms.
+ * Handles incoming Elementor Pro Form webhooks.
  */
 export const handleElementorWebhook = async (req, res) => {
   const source = req.source;
   const body = req.body;
 
   try {
-    // 1. Normalize the payload
+    // 1️⃣ Normalize the incoming payload
     const normalizedData = normalizeElementorPayload(body);
 
-    // 2. Validate before saving
+    // 2️⃣ Validate before saving
     if (!normalizedData.email && !normalizedData.phone) {
       const message = "Lead rejected: no phone or email provided.";
       logger.warn(message, { source: source?.name });
+
       await ErrorLog.create({
         source: source?._id,
         context: "WEBHOOK_PROCESSING",
         message,
         payload: body,
       });
+
       return res.status(HTTP_STATUS.OK).json({
         success: false,
         message,
       });
     }
 
-    // 3. Create the new lead
+    // 3️⃣ Create new lead
     const newLead = new Lead({
       name: normalizedData.name,
       email: normalizedData.email,
@@ -153,22 +138,26 @@ export const handleElementorWebhook = async (req, res) => {
 
     await newLead.save();
 
-    // 4. Queue jobs
+    // 4️⃣ Queue background jobs
     await Job.insertMany([
       { lead: newLead._id, type: JOB_TYPES.APPEND_TO_SHEETS, status: "QUEUED" },
       { lead: newLead._id, type: JOB_TYPES.PUSH_TO_BITRIX, status: "QUEUED" },
     ]);
 
-    // 5. Increment lead count
+    // 5️⃣ Increment source's lead count
     await Source.updateOne({ _id: source._id }, { $inc: { leadCount: 1 } });
 
-    logger.info(`Lead ${newLead._id} created from ${source.name}`);
+    logger.info(
+      `Lead ${newLead._id} created successfully. Source: ${source.name}`
+    );
 
+    // 6️⃣ Respond success
     return res.status(HTTP_STATUS.CREATED).json({
       success: true,
       message: "Lead queued successfully.",
     });
   } catch (error) {
+    // 7️⃣ Handle unexpected errors
     logger.error("Failed to process Elementor webhook:", {
       message: error.message,
       stack: error.stack,
