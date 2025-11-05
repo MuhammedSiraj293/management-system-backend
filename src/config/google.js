@@ -18,10 +18,10 @@ const __dirname = path.dirname(__filename);
  * 6. !! ADD 'service-account.json' to your .gitignore file !!
  * 7. Share your Google Sheet with the service account's email address.
  */
-const SERVICE_ACCOUNT_KEY_FILE = path.resolve(
-  __dirname,
-  '../service-account.json'
-);
+// Prefer the Render secret file path if it exists, otherwise use local fallback
+const SERVICE_ACCOUNT_KEY_FILE =
+  process.env.GOOGLE_APPLICATION_CREDENTIALS ||
+  path.resolve(__dirname, '../service-account.json');
 
 // These are the 'permissions' our app is asking for
 const SCOPES = ['https://www.googleapis.com/auth/spreadsheets'];
