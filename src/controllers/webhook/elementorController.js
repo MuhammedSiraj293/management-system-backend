@@ -12,7 +12,7 @@ import logger from "../../config/logger.js";
 
 /**
  * Normalize Elementor webhook payload
- * Handles both array-style and object-style field formats.
+ * Handles array-style, object-style, and object-of-objects-style formats.
  *
  * @param {object} body - The raw req.body from Elementor.
  * @returns {object} Normalized lead data.
@@ -42,6 +42,33 @@ const normalizeElementorPayload = (body) => {
     fields = flat;
   }
 
+  // --- NEW FIX: Handle object-of-objects ---
+  // This checks if the fields object looks like:
+  // { name: { id: 'name', value: '...' }, email: { ... } }
+  const fieldKeys = Object.keys(fields);
+  const firstField = fieldKeys.length > 0 ? fields[fieldKeys[0]] : null;
+  
+  if (
+    firstField &&
+    typeof firstField === 'object' &&
+    firstField !== null &&
+    !Array.isArray(firstField) && // Ensure it's not an array
+    firstField.value !== undefined // Check for the .value property
+  ) {
+    const flat = {};
+    for (const key of fieldKeys) {
+      // Use 'key' as the new flat key (e.g., 'name', 'email')
+      if (fields[key] && fields[key].value !== undefined) {
+        flat[key] = fields[key].value;
+      }
+    }
+    // Now, 'fields' is a flat object like { name: 'John', email: '...' }
+    fields = flat;
+  }
+  // --- END NEW FIX ---
+
+  // Now that 'fields' is guaranteed to be a flat object,
+  // this loop will work correctly.
   const phoneRegex = /^[\+]?[0-9\s\-]{7,15}$/;
   let name = null, email = null, phone = null, utm = {};
 
@@ -54,7 +81,10 @@ const normalizeElementorPayload = (body) => {
     if (lower.includes("email") && !email) email = value;
     if ((lower.includes("phone") || lower.includes("tel") || lower.includes("mobile")) && !phone)
       phone = value;
-    if (!phone && value.match(phoneRegex)) phone = value;
+    
+    // Check for phone in a random field, BUT only if it's not an email
+    if (!phone && value.match(phoneRegex) && !value.includes('@')) phone = value;
+    
     if (lower.startsWith("utm_")) utm[lower.replace("utm_", "")] = value;
   }
 
@@ -70,6 +100,7 @@ const normalizeElementorPayload = (body) => {
 
 /**
  * Handles incoming Elementor Pro Form webhooks.
+ * (This part is the same as your code)
  */
 export const handleElementorWebhook = async (req, res) => {
   const source = req.source;
