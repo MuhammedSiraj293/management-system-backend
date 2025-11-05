@@ -19,9 +19,10 @@ const __dirname = path.dirname(__filename);
  * 7. Share your Google Sheet with the service account's email address.
  */
 // Prefer the Render secret file path if it exists, otherwise use local fallback
-const SERVICE_ACCOUNT_KEY_FILE =
-  process.env.GOOGLE_APPLICATION_CREDENTIALS ||
-  path.resolve(__dirname, '../service-account.json');
+// First try Render's secret path, then fallback to local dev file
+const SERVICE_ACCOUNT_KEY_FILE = process.env.GOOGLE_APPLICATION_CREDENTIALS
+  ? process.env.GOOGLE_APPLICATION_CREDENTIALS
+  : path.resolve(__dirname, '../service-account.json');
 
 // These are the 'permissions' our app is asking for
 const SCOPES = ['https://www.googleapis.com/auth/spreadsheets'];
