@@ -18,9 +18,13 @@ import { errorHandler, notFoundHandler } from './middlewares/errorHandler.js';
 
 // --- Initialize Express App ---
 const app = express();
-
+// --- CORS Configuration ---
+const VERCEL_URL = 'https://management-system-capave.vercel.app/';
 // --- Core Middlewares ---
-app.use(cors());
+app.use(cors({
+  origin: [VERCEL_URL, 'http://localhost:5173'], // Allow Vercel and local dev
+  methods: ['GET', 'POST', 'PUT', 'DELETE'],
+}));
 app.use(helmet());
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
