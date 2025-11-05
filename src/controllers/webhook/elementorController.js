@@ -1,14 +1,14 @@
-import Lead from '../../models/Lead.js';
-import Source from '../../models/Source.js';
-import ErrorLog from '../../models/ErrorLog.js';
-import Job from '../../models/Job.js'; // --- CHANGED: Importing Job model
+import Lead from "../../models/Lead.js";
+import Source from "../../models/Source.js";
+import ErrorLog from "../../models/ErrorLog.js";
+import Job from "../../models/Job.js"; // --- CHANGED: Importing Job model
 import {
   LEAD_STATUSES,
   LEAD_SOURCES,
   JOB_TYPES, // --- ADDED: Need job types
   HTTP_STATUS,
-} from '../../utils/constants.js';
-import logger from '../../config/logger.js'; // --- ADDED: For better logging
+} from "../../utils/constants.js";
+import logger from "../../config/logger.js"; // --- ADDED: For better logging
 
 /**
  * Normalizes the incoming payload from an Elementor form.
@@ -26,21 +26,21 @@ const normalizeElementorPayload = (body) => {
     const lowerKey = key.toLowerCase();
     const value = fields[key];
     if (!value) continue;
-    if (lowerKey.includes('name') && !name) name = value;
-    else if (lowerKey.includes('email') && !email) email = value;
+    if (lowerKey.includes("name") && !name) name = value;
+    else if (lowerKey.includes("email") && !email) email = value;
     else if (
-      (lowerKey.includes('phone') ||
-        lowerKey.includes('mobile') ||
-        lowerKey.includes('whatsapp')) &&
+      (lowerKey.includes("phone") ||
+        lowerKey.includes("mobile") ||
+        lowerKey.includes("whatsapp")) &&
       !phone
     )
       phone = value;
-    else if (lowerKey.startsWith('utm_'))
-      utm[lowerKey.replace('utm_', '')] = value;
+    else if (lowerKey.startsWith("utm_"))
+      utm[lowerKey.replace("utm_", "")] = value;
   }
   if (!name && fields.first_name)
-    name = `${fields.first_name} ${fields.last_name || ''}`.trim();
-  return { name, email, phone, formName: form_name || 'N/A', utm };
+    name = `${fields.first_name} ${fields.last_name || ""}`.trim();
+  return { name, email, phone, formName: form_name || "N/A", utm };
 };
 
 /**
@@ -60,21 +60,21 @@ export const handleElementorWebhook = async (req, res) => {
     const normalizedData = normalizeElementorPayload(body);
 
     // 2. Validate required fields
-    if (!normalizedData.phone) {
-      logger.warn(
-        `Elementor lead rejected: No phone number. Source: ${source.name}`
-      );
-      await ErrorLog.create({
-        source: source._id,
-        context: 'WEBHOOK_PROCESSING',
-        message: 'Lead rejected: No phone number provided in payload.',
-        payload: body,
-      });
-      // Respond 200 OK so Elementor doesn't retry a bad lead
-      return res
-        .status(HTTP_STATUS.OK)
-        .json({ success: false, message: 'Lead rejected: no phone.' });
-    }
+    // if (!normalizedData.phone) {
+    //   logger.warn(
+    //     `Elementor lead rejected: No phone number. Source: ${source.name}`
+    //   );
+    //   await ErrorLog.create({
+    //     source: source._id,
+    //     context: 'WEBHOOK_PROCESSING',
+    //     message: 'Lead rejected: No phone number provided in payload.',
+    //     payload: body,
+    //   });
+    //   // Respond 200 OK so Elementor doesn't retry a bad lead
+    //   return res
+    //     .status(HTTP_STATUS.OK)
+    //     .json({ success: false, message: 'Lead rejected: no phone.' });
+    // }
 
     // 3. Create and save the new lead
     const newLead = new Lead({
@@ -99,15 +99,15 @@ export const handleElementorWebhook = async (req, res) => {
       {
         lead: newLead._id,
         type: JOB_TYPES.APPEND_TO_SHEETS,
-        status: 'QUEUED',
+        status: "QUEUED",
         runAt: new Date(),
       },
       {
         lead: newLead._id,
         type: JOB_TYPES.PUSH_TO_BITRIX,
-        status: 'QUEUED',
+        status: "QUEUED",
         runAt: new Date(), // Run 1 minute later (optional)
-        // runAt: new Date(Date.now() + 60 * 1000), 
+        // runAt: new Date(Date.now() + 60 * 1000),
       },
     ];
 
@@ -117,26 +117,41 @@ export const handleElementorWebhook = async (req, res) => {
     await Source.updateOne({ _id: source._id }, { $inc: { leadCount: 1 } });
 
     // 6. Respond immediately
-    logger.info(`Lead ${newLead._id} created and queued. Source: ${source.name}`);
+    logger.info(
+      `Lead ${newLead._id} created and queued. Source: ${source.name}`
+    );
     return res
       .status(HTTP_STATUS.CREATED)
-      .json({ success: true, message: 'Lead queued successfully.' });
+      .json({ success: true, message: "Lead queued successfully." });
   } catch (error) {
-    logger.error('Failed to process Elementor webhook:', {
-      message: error.message,
-      source: source?.name,
-      stack: error.stack,
-    });
+    // --- THIS CATCH BLOCK IS NOW MORE IMPORTANT ---
+    // It will catch the 'A lead must have... email or phone' error
+    // from the database.
+    logger.error("Failed to process Elementor webhook:", error.message);
+
+    // Check if it's our validation error
+    if (error.message.includes("phone or an email")) {
+      // Log it but respond 200 OK so Elementor doesn't retry
+      await ErrorLog.create({
+        source: source?._id,
+        context: "WEBHOOK_PROCESSING",
+        message: "Lead rejected: No phone or email provided.",
+        payload: body,
+      });
+      return res
+        .status(HTTP_STATUS.OK)
+        .json({ success: false, message: "Lead rejected: no phone or email." });
+    }
     await ErrorLog.create({
       source: source?._id,
-      context: 'WEBHOOK_PROCESSING',
+      context: "WEBHOOK_PROCESSING",
       message: error.message,
       stack: error.stack,
       payload: body,
     });
     return res.status(HTTP_STATUS.INTERNAL_SERVER_ERROR).json({
       success: false,
-      message: 'Internal server error.',
+      message: "Internal server error.",
     });
   }
 };

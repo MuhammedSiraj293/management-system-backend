@@ -57,7 +57,7 @@ const leadSchema = new Schema(
     phone: {
       type: String,
       trim: true,
-      required: [true, 'Phone number is required for a lead'],
+      default: null,
     },
 
     // --- UTM & Marketing Data ---
@@ -132,6 +132,21 @@ leadSchema.index({ phone: 1, sourceId: 1, createdAt: -1 }); // For duplicate che
 leadSchema.index({ sourceId: 1 });
 leadSchema.index({ status: 1, createdAt: -1 }); // For the worker to find jobs
 leadSchema.index({ createdAt: -1 }); // For sorting the main lead table
+
+// --- ADD THIS NEW VALIDATION RULE ---
+// This runs before any .save() command.
+// It checks if *both* phone and email are missing.
+leadSchema.pre('validate', function(next) {
+  if (!this.phone && !this.email) {
+    // If both are missing, stop the save and send an error
+    next(new Error('A lead must have at least a phone number or an email.'));
+  } else {
+    // If at least one is present, continue.
+    next();
+  }
+});
+// --- END NEW RULE ---
+
 
 const Lead = mongoose.model('Lead', leadSchema);
 
