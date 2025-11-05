@@ -12,42 +12,36 @@ import logger from "../../config/logger.js";
 
 /**
  * Normalizes the incoming payload from an Elementor form.
- * THIS FUNCTION IS NOW UPDATED to read 'flat' fields and
- * to auto-detect phone numbers in custom fields.
+ * THIS IS THE NEW, MORE ROBUST VERSION.
  *
  * @param {object} body - The raw req.body from Elementor.
  * @returns {object} A normalized lead data object.
  */
 const normalizeElementorPayload = (body) => {
-  const { form_name } = body || {};
+  const { form_name, form_fields } = body || {};
+
+  // --- THIS IS THE FIX ---
+  // We check for the 'form_fields' object first.
+  // If it doesn't exist, we fall back to using the entire 'body'.
+  // This handles both of Elementor's payload structures.
+  const fields = form_fields || body || {};
 
   let name = null;
   let email = null;
   let phone = null;
   let utm = {};
 
-  // --- THIS IS THE FIX ---
-  // We use the entire 'body' as the fields object,
-  // not 'body.form_fields'.
-  const fields = body || {};
+  // This regex will match 7-15 digit phone numbers,
+  // allowing spaces, +, and hyphens.
+  const phoneRegex = /^[\+]?[0-9\s\-]{7,15}$/;
 
   for (const key in fields) {
     const lowerKey = key.toLowerCase();
     const value = fields[key];
 
-    if (!value) continue; // Skip empty fields
+    if (!value || typeof value !== "string") continue; // Skip empty or non-string values
 
-    // Skip Elementor's internal fields
-    if (
-      lowerKey === "form_id" ||
-      lowerKey === "form_name" ||
-      lowerKey === "post_id" ||
-      lowerKey === "elementor_id"
-    ) {
-      continue;
-    }
-
-    // 1. Check for standard, named fields first
+    // 1. Check for standard, named fields
     if (lowerKey === "name" && !name) {
       name = value;
     } else if (lowerKey === "email" && !email) {
@@ -62,12 +56,7 @@ const normalizeElementorPayload = (body) => {
       phone = value;
     }
     // 3. Auto-detect phone in a random field (like 'field_48f580e')
-    else if (
-      !phone &&
-      key.startsWith("field_") &&
-      typeof value === "string" &&
-      value.match(/^[\+]?[0-9\s\-]{7,15}$/)
-    ) {
+    else if (!phone && value.match(phoneRegex)) {
       // If we don't have a phone yet, and the field's *value*
       // looks like a phone number, use it.
       phone = value;
@@ -97,7 +86,7 @@ const normalizeElementorPayload = (body) => {
  * (This logic is the same as the last step)
  */
 export const handleElementorWebhook = async (req, res) => {
-  const source = req.source; // Attached by our verifyWebhookToken middleware
+  const source = req.source;
   const body = req.body;
 
   try {
@@ -115,7 +104,7 @@ export const handleElementorWebhook = async (req, res) => {
       sourceId: source._id,
       siteName: source.name,
       status: LEAD_STATUSES.QUEUED,
-      payload: body,
+      payload: body, // Store the original raw payload
       timestampUtc: new Date(),
     });
 
@@ -166,6 +155,7 @@ export const handleElementorWebhook = async (req, res) => {
       stack: error.stack,
       payload: body,
     });
+    // Respond with 500 so Elementor logs the error
     return res.status(HTTP_STATUS.INTERNAL_SERVER_ERROR).json({
       success: false,
       message: "Internal server error.",
