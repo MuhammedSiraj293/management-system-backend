@@ -106,6 +106,9 @@ export const handleElementorWebhook = async (req, res) => {
   const source = req.source;
   const body = req.body;
 
+  console.log("Elementor Raw Payload:", JSON.stringify(req.body, null, 2));
+
+
   try {
     // 1️⃣ Normalize the incoming payload
     const normalizedData = normalizeElementorPayload(body);
