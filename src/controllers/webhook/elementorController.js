@@ -12,7 +12,8 @@ import logger from "../../config/logger.js";
 
 /**
  * Normalize Elementor webhook payload
- * Handles array-style, object-style, and object-of-objects-style formats.
+ * THIS IS THE NEW ROBUST VERSION that handles both
+ * "Simple" (flat) and "Advanced" (nested) payloads.
  *
  * @param {object} body - The raw req.body from Elementor.
  * @returns {object} Normalized lead data.
@@ -20,79 +21,71 @@ import logger from "../../config/logger.js";
 const normalizeElementorPayload = (body) => {
   if (!body) return {};
 
-  let fields = body.form_fields || body.fields || body || {};
+  let flatFields = {};
+  let formName = body.form_name || body.form?.name || "N/A";
 
-  // Handle array-of-objects (default Elementor)
-  if (Array.isArray(fields)) {
-    const flat = {};
-    for (const f of fields) {
-      const key = f?.id || f?.name || f?.field_name;
-      if (key && f?.value !== undefined) flat[key] = f.value;
-    }
-    fields = flat;
-  }
-
-  // Handle nested structure (like { body: { form_fields: [...] } })
-  if (fields.form_fields && Array.isArray(fields.form_fields)) {
-    const flat = {};
-    for (const f of fields.form_fields) {
-      const key = f?.id || f?.name;
-      if (key && f?.value !== undefined) flat[key] = f.value;
-    }
-    fields = flat;
-  }
-
-  // --- NEW FIX: Handle object-of-objects ---
-  // This checks if the fields object looks like:
-  // { name: { id: 'name', value: '...' }, email: { ... } }
-  const fieldKeys = Object.keys(fields);
-  const firstField = fieldKeys.length > 0 ? fields[fieldKeys[0]] : null;
-  
-  if (
-    firstField &&
-    typeof firstField === 'object' &&
-    firstField !== null &&
-    !Array.isArray(firstField) && // Ensure it's not an array
-    firstField.value !== undefined // Check for the .value property
-  ) {
-    const flat = {};
-    for (const key of fieldKeys) {
-      // Use 'key' as the new flat key (e.g., 'name', 'email')
-      if (fields[key] && fields[key].value !== undefined) {
-        flat[key] = fields[key].value;
+  if (body.fields) {
+    // --- Handle "Advanced" Payload ---
+    // (e.g., body.fields.name.value, body.fields.field_5ad7044.value)
+    for (const key in body.fields) {
+      if (body.fields[key] && body.fields[key].value !== undefined) {
+        // Use the field's 'title' (like 'phone') as the key if it exists,
+        // otherwise, use the field's 'id' (like 'email' or 'name')
+        const field = body.fields[key];
+        const newKey = field.title?.toLowerCase() || field.id?.toLowerCase() || key.toLowerCase();
+        flatFields[newKey] = field.value;
       }
     }
-    // Now, 'fields' is a flat object like { name: 'John', email: '...' }
-    fields = flat;
+  } else {
+    // --- Handle "Simple" Payload ---
+    // (e.g., body.Name, body.Email, body.phone)
+    // We just copy the whole body. The loop below will find the right keys.
+    flatFields = body;
   }
-  // --- END NEW FIX ---
 
-  // Now that 'fields' is guaranteed to be a flat object,
-  // this loop will work correctly.
+  // Now, loop through the (now flat) flatFields object to find our data.
   const phoneRegex = /^[\+]?[0-9\s\-]{7,15}$/;
   let name = null, email = null, phone = null, utm = {};
 
-  for (const key in fields) {
-    const lower = key.toLowerCase();
-    const value = String(fields[key] ?? "").trim();
+  for (const key in flatFields) {
+    const lowerKey = key.toLowerCase();
+    const value = String(flatFields[key] ?? "").trim();
     if (!value) continue;
 
-    if (lower.includes("name") && !name) name = value;
-    if (lower.includes("email") && !email) email = value;
-    if ((lower.includes("phone") || lower.includes("tel") || lower.includes("mobile")) && !phone)
+    // Find Name
+    if ((lowerKey === 'name' || lowerKey.includes('full_name')) && !name) {
+      name = value;
+    }
+    // Find Email
+    if (lowerKey === 'email' && !email) {
+      email = value;
+    }
+    // Find Phone
+    if ((lowerKey === 'phone' || lowerKey.includes('tel') || lowerKey.includes('mobile')) && !phone) {
       phone = value;
+    }
+
+    // Auto-detect phone in a random field, BUT only if it's not an email
+    if (!phone && value.match(phoneRegex) && !value.includes('@')) {
+      phone = value;
+    }
     
-    // Check for phone in a random field, BUT only if it's not an email
-    if (!phone && value.match(phoneRegex) && !value.includes('@')) phone = value;
-    
-    if (lower.startsWith("utm_")) utm[lower.replace("utm_", "")] = value;
+    // Get UTM tags
+    if (lowerKey.startsWith("utm_")) {
+      utm[lowerKey.replace("utm_", "")] = value;
+    }
+  }
+
+  // Fallback for first_name/last_name
+  if (!name && (flatFields.first_name || flatFields.last_name)) {
+    name = `${flatFields.first_name || ''} ${flatFields.last_name || ''}`.trim();
   }
 
   return {
     name,
     email,
     phone,
-    formName: body.form_name || "N/A",
+    formName: formName, // Use the name we found at the start
     utm,
   };
 };
@@ -100,20 +93,17 @@ const normalizeElementorPayload = (body) => {
 
 /**
  * Handles incoming Elementor Pro Form webhooks.
- * (This part is the same as your code)
+ * (This is the same logic you provided, which is great)
  */
 export const handleElementorWebhook = async (req, res) => {
   const source = req.source;
   const body = req.body;
 
-  console.log("Elementor Raw Payload:", JSON.stringify(req.body, null, 2));
-
-
   try {
     // 1️⃣ Normalize the incoming payload
     const normalizedData = normalizeElementorPayload(body);
 
-    // 2️⃣ Validate before saving
+    // 2️⃣ Validate before saving (our controller-level check)
     if (!normalizedData.email && !normalizedData.phone) {
       const message = "Lead rejected: no phone or email provided.";
       logger.warn(message, { source: source?.name });
@@ -125,6 +115,7 @@ export const handleElementorWebhook = async (req, res) => {
         payload: body,
       });
 
+      // Respond 200 OK so Elementor doesn't retry a bad lead
       return res.status(HTTP_STATUS.OK).json({
         success: false,
         message,
@@ -146,6 +137,8 @@ export const handleElementorWebhook = async (req, res) => {
       timestampUtc: new Date(),
     });
 
+    // This save() will also be protected by the Lead.js model's
+    // pre-validate hook, just in case.
     await newLead.save();
 
     // 4️⃣ Queue background jobs
