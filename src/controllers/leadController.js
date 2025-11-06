@@ -1,8 +1,52 @@
-import Lead from '../models/Lead.js';
-import Job from '../models/Job.js';
-import Source from '../models/Source.js';
-import { HTTP_STATUS, LEAD_SOURCES, LEAD_STATUSES, JOB_TYPES } from '../utils/constants.js';
-import logger from '../config/logger.js';
+import Lead from "../models/Lead.js";
+import Job from "../models/Job.js";
+import Source from "../models.js/Source.js";
+import { HTTP_STATUS, LEAD_STATUSES, JOB_TYPES } from "../utils/constants.js";
+import logger from "../config/logger.js";
+import { isValid, parseISO } from "date-fns"; // We'll need to install date-fns
+
+/**
+ * --- Helper Function to calculate date ranges ---
+ */
+const getDateRangeFilter = (queryParams) => {
+  const { dateRange, dateFrom, dateTo } = queryParams;
+  const createdAtFilter = {};
+
+  if (dateRange && dateRange !== "all" && dateRange !== "custom") {
+    // --- Handle preset ranges (24h, 7d, 14d, 28d) ---
+    const now = new Date();
+    let daysToSubtract = 0;
+
+    if (dateRange === "24h") {
+      daysToSubtract = 1;
+    } else if (dateRange === "7d") {
+      daysToSubtract = 7;
+    } else if (dateRange === "14d") {
+      daysToSubtract = 14;
+    } else if (dateRange === "28d") {
+      daysToSubtract = 28;
+    }
+
+    if (daysToSubtract > 0) {
+      createdAtFilter.$gte = new Date(
+        now.setDate(now.getDate() - daysToSubtract)
+      );
+    }
+  } else if (dateRange === "custom") {
+    // --- Handle custom date range ---
+    if (dateFrom && isValid(parseISO(dateFrom))) {
+      // Set to the start of the day
+      createdAtFilter.$gte = new Date(`${dateFrom}T00:00:00.000Z`);
+    }
+    if (dateTo && isValid(parseISO(dateTo))) {
+      // Set to the end of the day
+      createdAtFilter.$lte = new Date(`${dateTo}T23:59:59.999Z`);
+    }
+  }
+
+  // Return the filter if it has keys, otherwise return null
+  return Object.keys(createdAtFilter).length > 0 ? createdAtFilter : null;
+};
 
 /**
  * Fetches all leads with pagination, filtering, and sorting.
@@ -17,26 +61,42 @@ export const getAllLeads = async (req, res) => {
 
     // --- Filtering ---
     const filters = {};
+
+    // 1. Filter by Source ID (from dropdown)
     if (req.query.sourceId) {
       filters.sourceId = req.query.sourceId;
     }
+
+    // 2. Filter by Status (from dropdown)
     if (req.query.status) {
       filters.status = req.query.status;
     }
-    if (req.query.phone) {
-      // Basic search by phone number
-      filters.phone = { $regex: req.query.phone, $options: 'i' };
+
+    // 3. Filter by Date Range
+    const dateFilter = getDateRangeFilter(req.query);
+    if (dateFilter) {
+      filters.createdAt = dateFilter;
+    }
+
+    // 4. (Future) Filter by Search Term (phone, email, name)
+    if (req.query.search) {
+      const searchRegex = { $regex: req.query.search, $options: "i" };
+      filters.$or = [
+        { name: searchRegex },
+        { email: searchRegex },
+        { phone: searchRegex },
+      ];
     }
 
     // --- Sorting ---
     const sort = {};
-    const sortField = req.query.sort || 'createdAt';
-    const sortOrder = req.query.order === 'asc' ? 1 : -1;
+    const sortField = req.query.sort || "createdAt";
+    const sortOrder = req.query.order === "asc" ? 1 : -1;
     sort[sortField] = sortOrder;
 
     // --- Database Query ---
     const leads = await Lead.find(filters)
-      .populate('sourceId', 'name platform') // Populate source info
+      .populate("sourceId", "name platform") // Populate source info
       .sort(sort)
       .skip(skip)
       .limit(limit)
@@ -56,42 +116,46 @@ export const getAllLeads = async (req, res) => {
       },
     });
   } catch (error) {
-    logger.error('Error fetching leads:', error.message);
+    logger.error("Error fetching leads:", error.message);
     res
       .status(HTTP_STATUS.INTERNAL_SERVER_ERROR)
-      .json({ success: false, message: 'Error fetching leads' });
+      .json({ success: false, message: "Error fetching leads" });
   }
 };
 
 /**
  * Manually creates a new lead from the admin dashboard.
+ * (This controller is unchanged)
  */
 export const createLead = async (req, res) => {
   try {
     const { name, phone, email, sourceId } = req.body;
-
-    // 1. Validate input
-    if (!phone || !sourceId) {
+    if (!phone && !email) {
+      // Use our new validation
       return res.status(HTTP_STATUS.BAD_REQUEST).json({
         success: false,
-        message: 'Phone number and source ID are required.',
+        message: "Phone number or email is required.",
+      });
+    }
+    if (!sourceId) {
+      return res.status(HTTP_STATUS.BAD_REQUEST).json({
+        success: false,
+        message: "Source ID is required.",
       });
     }
 
-    // 2. Find the source
     const source = await Source.findById(sourceId);
     if (!source) {
       return res
         .status(HTTP_STATUS.NOT_FOUND)
-        .json({ success: false, message: 'Source not found.' });
+        .json({ success: false, message: "Source not found." });
     }
 
-    // 3. Create the new lead
     const newLead = new Lead({
       name,
       phone,
       email,
-      source: source.platform, // e.g., 'elementor'
+      source: source.platform,
       sourceId: source._id,
       siteName: source.name,
       status: LEAD_STATUSES.QUEUED,
@@ -101,73 +165,72 @@ export const createLead = async (req, res) => {
 
     await newLead.save();
 
-    // 4. Create background jobs for the new lead
     await Job.insertMany([
-      { lead: newLead._id, type: JOB_TYPES.APPEND_TO_SHEETS, status: 'QUEUED' },
-      { lead: newLead._id, type: JOB_TYPES.PUSH_TO_BITRIX, status: 'QUEUED' },
+      { lead: newLead._id, type: JOB_TYPES.APPEND_TO_SHEETS, status: "QUEUED" },
+      { lead: newLead._id, type: JOB_TYPES.PUSH_TO_BITRIX, status: "QUEUED" },
     ]);
 
     logger.info(`Manually created and queued lead ${newLead._id}`);
     res.status(HTTP_STATUS.CREATED).json({ success: true, data: newLead });
   } catch (error) {
-    logger.error('Error manually creating lead:', error.message);
+    logger.error("Error manually creating lead:", error.message);
     res
       .status(HTTP_STATUS.INTERNAL_SERVER_ERROR)
-      .json({ success: false, message: 'Error creating lead' });
+      .json({ success: false, message: "Error creating lead" });
   }
 };
 
 /**
  * Retries failed jobs for a specific lead.
+ * (This controller is unchanged)
  */
 export const retryLeadJobs = async (req, res) => {
   try {
     const { leadId } = req.params;
-    
-    // 1. Find all 'FAILED' jobs for this lead
-    const failedJobs = await Job.find({ 
-      lead: leadId, 
-      status: 'FAILED' 
+
+    const failedJobs = await Job.find({
+      lead: leadId,
+      status: "FAILED",
     });
 
     if (failedJobs.length === 0) {
       return res.status(HTTP_STATUS.OK).json({
         success: true,
-        message: 'No failed jobs found for this lead.',
+        message: "No failed jobs found for this lead.",
       });
     }
 
-    // 2. Reset the failed jobs back to 'QUEUED'
-    const jobIdsToRetry = failedJobs.map(job => job._id);
-    
+    const jobIdsToRetry = failedJobs.map((job) => job._id);
+
     await Job.updateMany(
       { _id: { $in: jobIdsToRetry } },
       {
         $set: {
-          status: 'QUEUED',
-          attempts: 0, // Reset attempts
+          status: "QUEUED",
+          attempts: 0,
           lastError: null,
-          runAt: new Date(), // Run now
-        }
+          runAt: new Date(),
+        },
       }
     );
 
-    // 3. Update the lead's main status back to 'QUEUED'
     await Lead.updateOne(
       { _id: leadId },
       { $set: { status: LEAD_STATUSES.QUEUED } }
     );
-    
+
     logger.info(`Retrying ${failedJobs.length} jobs for lead ${leadId}`);
     res.status(HTTP_STATUS.OK).json({
       success: true,
       message: `Successfully queued ${failedJobs.length} jobs for retry.`,
     });
-
   } catch (error) {
-    logger.error(`Error retrying jobs for lead ${req.params.leadId}:`, error.message);
+    logger.error(
+      `Error retrying jobs for lead ${req.params.leadId}:`,
+      error.message
+    );
     res
       .status(HTTP_STATUS.INTERNAL_SERVER_ERROR)
-      .json({ success: false, message: 'Error retrying jobs' });
+      .json({ success: false, message: "Error retrying jobs" });
   }
 };

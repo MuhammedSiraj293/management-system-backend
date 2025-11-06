@@ -1,54 +1,44 @@
-import Lead from '../../models/Lead.js';
-import Source from '../../models/Source.js';
-import ErrorLog from '../../models/ErrorLog.js';
-import Job from '../../models/Job.js';
+import Lead from "../../models/Lead.js";
+import Source from "../../models/Source.js";
+import ErrorLog from "../../models/ErrorLog.js";
+import Job from "../../models/Job.js";
 import {
   LEAD_STATUSES,
   LEAD_SOURCES,
   JOB_TYPES,
   HTTP_STATUS,
-} from '../../utils/constants.js';
-import logger from '../../config/logger.js';
+} from "../../utils/constants.js";
+import logger from "../../config/logger.js";
 
 /**
  * Normalizes the incoming payload from a Meta Lead Ad webhook.
- * Meta sends data in a 'field_data' array.
- * @param {object} value - The 'value' object from the webhook.
- * @returns {object} A normalized lead data object.
  */
 const normalizeMetaPayload = (value) => {
-  const {
-    field_data,
-    campaign_name,
-    form_name,
-    ad_name,
-    adset_name,
-  } = value;
+  const { field_data, campaign_name, form_name, ad_name, adset_name } = value;
 
   let name = null;
   let email = null;
   let phone = null;
 
-  // Loop through the field_data array to find our standard fields
   for (const field of field_data) {
     const fieldName = field.name.toLowerCase();
-    const fieldValue = field.values[0]; // Get the first value
+    const fieldValue = field.values[0];
 
-    if (
-      (fieldName.includes('name') || fieldName === 'full_name') &&
-      !name
-    ) {
+    if (!fieldValue) continue;
+
+    if ((fieldName.includes("name") || fieldName === "full_name") && !name) {
       name = fieldValue;
     } else if (
-      (fieldName.includes('email') || fieldName === 'email') &&
+      (fieldName.includes("email") || fieldName === "email") &&
       !email
     ) {
       email = fieldValue;
     } else if (
-      (fieldName.includes('phone') || fieldName === 'phone_number') &&
+      (fieldName.includes("phone") || fieldName === "phone_number") &&
       !phone
     ) {
-      phone = fieldValue;
+      // Clean the phone number by removing spaces, +, -
+      phone = fieldValue.replace(/[\s\+\-]/g, "");
     }
   }
 
@@ -56,101 +46,109 @@ const normalizeMetaPayload = (value) => {
     name,
     email,
     phone,
-    formName: form_name || 'N/A',
-    campaignName: campaign_name || 'N/A',
-    adName: ad_name || 'N/A',
-    adSetName: adset_name || 'N/A',
+    formName: form_name || "N/A",
+    campaignName: campaign_name || "N/A",
+    adName: ad_name || "N/A",
+    adSetName: adset_name || "N/A",
   };
 };
 
 /**
- * Handles incoming webhooks from Meta (Facebook) Lead Ads.
+ * Handle Meta webhook — respond instantly, process asynchronously.
  */
 export const handleMetaWebhook = async (req, res) => {
-  const source = req.source; // Attached by our verifyWebhookToken middleware
+  const source = req.source;
   const body = req.body;
 
+  // ✅ Respond immediately (200 OK is required by Meta)
+  res.status(HTTP_STATUS.OK).json({
+    success: true,
+    message: "Webhook received successfully.",
+  });
+
+  // 🔄 Process the payload asynchronously (after sending response)
+  processMetaLead(source, body).catch((err) => {
+    logger.error("Async Meta processing failed:", err.message);
+  });
+};
+
+/**
+ * Background logic isolated to avoid res.json() reuse
+ */
+const processMetaLead = async (source, body) => {
   try {
     // Meta webhooks send a complex 'entry' array
     const entry = body.entry?.[0];
     const change = entry?.changes?.[0];
     const value = change?.value;
 
-    if (change?.field !== 'leadgen' || !value) {
+    if (change?.field !== "leadgen" || !value) {
       // Not a leadgen update, or no data. Ignore it.
-      return res
-        .status(HTTP_STATUS.OK)
-        .json({ success: true, message: 'Not a leadgen event. Ignored.' });
+      logger.info("Meta webhook received, but not a leadgen event. Ignored.");
+      return;
     }
 
-    // 1. Normalize the payload
-    const normalizedData = normalizeMetaPayload(value);
+    // 1️⃣ Normalize the payload
+    const normalized = normalizeMetaPayload(value);
 
-    // 2. Validate required fields
-    if (!normalizedData.phone) {
-      logger.warn(
-        `Meta lead rejected: No phone number. Source: ${source.name}`
-      );
+    // 2️⃣ Validate before saving
+    if (!normalized.email && !normalized.phone) {
+      const message = "Lead rejected: no phone or email provided.";
+      logger.warn(message, { source: source?.name });
       await ErrorLog.create({
-        source: source._id,
-        context: 'WEBHOOK_PROCESSING',
-        message: 'Lead rejected: No phone number provided in payload.',
+        source: source?._id,
+        context: "WEBHOOK_PROCESSING",
+        message,
         payload: body,
       });
-      // Respond 200 OK so Meta doesn't retry a bad lead
-      return res
-        .status(HTTP_STATUS.OK)
-        .json({ success: false, message: 'Lead rejected: no phone.' });
+      return;
     }
 
-    // 3. Create and save the new lead
+    // 3️⃣ Create new lead
     const newLead = new Lead({
-      name: normalizedData.name,
-      email: normalizedData.email,
-      phone: normalizedData.phone,
-      formName: normalizedData.formName,
-      campaignName: normalizedData.campaignName,
-      adName: normalizedData.adName,
-      adSetName: normalizedData.adSetName,
+      name: normalized.name,
+      email: normalized.email,
+      phone: normalized.phone,
+      formName: normalized.formName,
+      campaignName: normalized.campaignName,
+      adName: normalized.adName,
+      adSetName: normalized.adSetName,
       source: LEAD_SOURCES.META,
       sourceId: source._id,
       siteName: source.name,
       status: LEAD_STATUSES.QUEUED,
-      payload: body, // Store the original raw payload
+      payload: body,
       timestampUtc: new Date(value.created_time * 1000 || Date.now()),
     });
 
     await newLead.save();
 
-    // 4. Create background jobs in MongoDB
+    // 4️⃣ Queue background jobs
     await Job.insertMany([
-      { lead: newLead._id, type: JOB_TYPES.APPEND_TO_SHEETS, status: 'QUEUED' },
-      { lead: newLead._id, type: JOB_TYPES.PUSH_TO_BITRIX, status: 'QUEUED' },
+      { lead: newLead._id, type: JOB_TYPES.APPEND_TO_SHEETS, status: "QUEUED" },
+      { lead: newLead._id, type: JOB_TYPES.PUSH_TO_BITRIX, status: "QUEUED" },
     ]);
 
-    // 5. (Optional) Update the lead count on the source
+    // 5️⃣ Increment source's lead count
     await Source.updateOne({ _id: source._id }, { $inc: { leadCount: 1 } });
 
-    logger.info(`Meta Lead ${newLead._id} created and queued. Source: ${source.name}`);
-    return res
-      .status(HTTP_STATUS.CREATED)
-      .json({ success: true, message: 'Lead queued successfully.' });
+    logger.info(
+      `✅ Lead ${newLead._id} created successfully from Meta (${source.name}).`
+    );
   } catch (error) {
-    logger.error('Failed to process Meta webhook:', {
+    // 6️⃣ Handle unexpected errors
+    logger.error("❌ Failed to process Meta webhook:", {
       message: error.message,
-      source: source?.name,
       stack: error.stack,
+      source: source?.name,
     });
+
     await ErrorLog.create({
       source: source?._id,
-      context: 'WEBHOOK_PROCESSING',
+      context: "WEBHOOK_PROCESSING",
       message: error.message,
       stack: error.stack,
       payload: body,
-    });
-    return res.status(HTTP_STATUS.INTERNAL_SERVER_ERROR).json({
-      success: false,
-      message: 'Internal server error.',
     });
   }
 };
