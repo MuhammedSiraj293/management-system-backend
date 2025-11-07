@@ -30,7 +30,8 @@ router.post('/', createLead);
 // Retries all failed jobs for a specific lead
 router.post('/:leadId/retry', retryLeadJobs);
 
-// We can add GET /api/leads/:leadId later if needed
-// router.get('/:leadId', getLeadById);
+// GET /api/leads/:leadId
+// Fetches a single lead by its ID
+router.get('/:leadId', getLeadById);
 
 export default router;

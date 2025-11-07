@@ -123,6 +123,45 @@ export const getAllLeads = async (req, res) => {
   }
 };
 
+// --- NEW FUNCTION ADDED ---
+/**
+ * Fetches a single lead by its ID.
+ * This will also populate related jobs and errors.
+ */
+export const getLeadById = async (req, res) => {
+  try {
+    const { leadId } = req.params;
+
+    const lead = await Lead.findById(leadId)
+      .populate('sourceId', 'name platform')
+      .lean();
+
+    if (!lead) {
+      return res
+        .status(HTTP_STATUS.NOT_FOUND)
+        .json({ success: false, message: 'Lead not found' });
+    }
+
+    // Find all related jobs and errors
+    const jobs = await Job.find({ lead: leadId }).sort({ createdAt: -1 }).lean();
+    const errors = await ErrorLog.find({ lead: leadId }).sort({ createdAt: -1 }).lean();
+
+    res.status(HTTP_STATUS.OK).json({
+      success: true,
+      data: {
+        lead,
+        jobs,
+        errors,
+      },
+    });
+  } catch (error) {
+    logger.error(`Error fetching lead by ID ${req.params.leadId}:`, error.message);
+    res
+      .status(HTTP_STATUS.INTERNAL_SERVER_ERROR)
+      .json({ success: false, message: 'Error fetching lead details' });
+  }
+};
+// --- END NEW FUNCTION ---
 /**
  * Manually creates a new lead from the admin dashboard.
  * (This controller is unchanged)
