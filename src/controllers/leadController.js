@@ -1,6 +1,7 @@
 import Lead from "../models/Lead.js";
 import Job from "../models/Job.js";
 import Source from "../models/Source.js";
+import ErrorLog from '../models/ErrorLog.js';
 import { HTTP_STATUS, LEAD_STATUSES, JOB_TYPES } from "../utils/constants.js";
 import logger from "../config/logger.js";
 import { isValid, parseISO } from "date-fns"; // We'll need to install date-fns
