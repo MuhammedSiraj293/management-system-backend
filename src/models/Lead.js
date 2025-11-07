@@ -1,4 +1,5 @@
 import mongoose from 'mongoose';
+import MongooseSequence from 'mongoose-sequence';
 import { LEAD_SOURCES, LEAD_STATUSES } from '../utils/constants.js';
 
 const { Schema } = mongoose;
