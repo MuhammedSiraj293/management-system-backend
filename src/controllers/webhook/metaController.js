@@ -14,11 +14,23 @@ import logger from "../../config/logger.js";
  * Normalizes the incoming payload from a Meta Lead Ad webhook.
  */
 const normalizeMetaPayload = (value) => {
-  const { field_data, campaign_name, form_name, ad_name, adset_name } = value;
+  const {
+    field_data,
+    campaign_name,
+    form_name,
+    ad_name,
+    adset_name,
+  } = value;
 
   let name = null;
   let email = null;
   let phone = null;
+  // --- ADDED: New variables ---
+  let userType = null;
+  let propertyType = null;
+  let budget = null;
+  let bedrooms = null;
+  // --- END ADDED ---
 
   for (const field of field_data) {
     const fieldName = field.name.toLowerCase();
@@ -26,7 +38,11 @@ const normalizeMetaPayload = (value) => {
 
     if (!fieldValue) continue;
 
-    if ((fieldName.includes("name") || fieldName === "full_name") && !name) {
+    // --- (Name, Email, Phone logic is unchanged) ---
+    if (
+      (fieldName.includes("name") || fieldName === "full_name") &&
+      !name
+    ) {
       name = fieldValue;
     } else if (
       (fieldName.includes("email") || fieldName === "email") &&
@@ -37,11 +53,26 @@ const normalizeMetaPayload = (value) => {
       (fieldName.includes("phone") || fieldName === "phone_number") &&
       !phone
     ) {
-      // Clean the phone number by removing spaces, +, -
       phone = fieldValue.replace(/[\s\+\-]/g, "");
     }
+
+    // --- ADDED: Logic to find your new fields ---
+    // (These are guesses; adjust fieldName.includes() as needed)
+    if (fieldName.includes("user_type") || fieldName.includes("investor"))
+      userType = fieldValue;
+    
+    if (fieldName.includes("property_type") || fieldName.includes("property"))
+      propertyType = fieldValue;
+    
+    if (fieldName.includes("budget"))
+      budget = fieldValue;
+    
+    if (fieldName.includes("bedroom") || fieldName.includes("beds"))
+      bedrooms = fieldValue;
+    // --- END ADDED ---
   }
 
+  // --- ADDED: Return new fields ---
   return {
     name,
     email,
@@ -50,23 +81,28 @@ const normalizeMetaPayload = (value) => {
     campaignName: campaign_name || "N/A",
     adName: ad_name || "N/A",
     adSetName: adset_name || "N/A",
+    userType,
+    propertyType,
+    budget,
+    bedrooms,
   };
 };
 
 /**
  * Handle Meta webhook — respond instantly, process asynchronously.
+ * (This function is unchanged)
  */
 export const handleMetaWebhook = async (req, res) => {
   const source = req.source;
   const body = req.body;
 
-  // ✅ Respond immediately (200 OK is required by Meta)
+  // ✅ Respond immediately
   res.status(HTTP_STATUS.OK).json({
     success: true,
     message: "Webhook received successfully.",
   });
 
-  // 🔄 Process the payload asynchronously (after sending response)
+  // 🔄 Process the payload asynchronously
   processMetaLead(source, body).catch((err) => {
     logger.error("Async Meta processing failed:", err.message);
   });
@@ -77,13 +113,11 @@ export const handleMetaWebhook = async (req, res) => {
  */
 const processMetaLead = async (source, body) => {
   try {
-    // Meta webhooks send a complex 'entry' array
     const entry = body.entry?.[0];
     const change = entry?.changes?.[0];
     const value = change?.value;
 
     if (change?.field !== "leadgen" || !value) {
-      // Not a leadgen update, or no data. Ignore it.
       logger.info("Meta webhook received, but not a leadgen event. Ignored.");
       return;
     }
@@ -104,7 +138,7 @@ const processMetaLead = async (source, body) => {
       return;
     }
 
-    // 3️⃣ Create new lead
+    // 3️⃣ Create new lead (NOW INCLUDES NEW FIELDS)
     const newLead = new Lead({
       name: normalized.name,
       email: normalized.email,
@@ -113,6 +147,14 @@ const processMetaLead = async (source, body) => {
       campaignName: normalized.campaignName,
       adName: normalized.adName,
       adSetName: normalized.adSetName,
+      
+      // --- ADDED ---
+      userType: normalized.userType,
+      propertyType: normalized.propertyType,
+      budget: normalized.budget,
+      bedrooms: normalized.bedrooms,
+      // --- END ADDED ---
+
       source: LEAD_SOURCES.META,
       sourceId: source._id,
       siteName: source.name,
@@ -123,20 +165,20 @@ const processMetaLead = async (source, body) => {
 
     await newLead.save();
 
-    // 4️⃣ Queue background jobs
+    // 4️⃣ Queue background jobs (Unchanged)
     await Job.insertMany([
       { lead: newLead._id, type: JOB_TYPES.APPEND_TO_SHEETS, status: "QUEUED" },
       { lead: newLead._id, type: JOB_TYPES.PUSH_TO_BITRIX, status: "QUEUED" },
     ]);
 
-    // 5️⃣ Increment source's lead count
+    // 5️⃣ Increment source's lead count (Unchanged)
     await Source.updateOne({ _id: source._id }, { $inc: { leadCount: 1 } });
 
     logger.info(
-      `✅ Lead ${newLead._id} created successfully from Meta (${source.name}).`
+      `✅ Lead ${newLead._id} (ID: ${newLead.leadId}) created successfully from Meta (${source.name}).`
     );
   } catch (error) {
-    // 6️⃣ Handle unexpected errors
+    // 6️⃣ Handle unexpected errors (Unchanged)
     logger.error("❌ Failed to process Meta webhook:", {
       message: error.message,
       stack: error.stack,

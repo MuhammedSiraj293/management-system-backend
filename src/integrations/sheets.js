@@ -3,43 +3,89 @@ import logger from '../config/logger.js';
 import ErrorLog from '../models/ErrorLog.js';
 
 /**
+ * --- THIS IS THE NEW HEADER ROW ---
+ * The order of these titles MUST match the order of the
+ * 'row' variable below.
+ */
+const HEADER_ROW = [
+  "Date",
+  "Lead ID",
+  "Name",
+  "Phone",
+  "Email",
+  "User Type",
+  "Property Type",
+  "Budget",
+  "Bedrooms",
+  "Platform",
+  "Source Name",
+  "Form Name",
+  "Campaign",
+  "utm_source",
+  "utm_medium",
+  "utm_campaign",
+  "utm_term",
+  "utm_content",
+  "Internal Mongo ID"
+];
+
+/**
  * Appends a single lead's data as a new row to a
  * specified Google Sheet.
- *
- * @param {object} lead - The full Lead document from MongoDB.
- * @param {object} sourceConfig - The config object from the Source model.
- * @param {string} sourceConfig.sheetId - The ID of the Google Sheet.
- * @param {string} sourceConfig.sheetName - The name of the tab (e.g., 'Leads').
- * @returns {Promise<boolean>} - True on success, false on failure.
  */
 export const appendLeadToSheet = async (lead, sourceConfig) => {
   const { sheetId, sheetName } = sourceConfig;
 
-  // 1. Check if this source is configured for Google Sheets
   if (!sheetId || !sheetName) {
     logger.warn(
-      `Google Sheets: Skipping lead ${lead._id}. Source '${lead.siteName}' is not configured with a Sheet ID and Name.`
+      `Google Sheets: Skipping lead ${lead._id}. Source '${lead.siteName}' is not configured.`
     );
-    // We return true here because it's not a "failure",
-    // it's just not configured.
     return true;
   }
 
   logger.info(
-    `Google Sheets: Appending lead ${lead._id} to Sheet ID: ${sheetId}`
+    `Google Sheets: Appending lead ${lead.leadId || lead._id} to Sheet ID: ${sheetId}`
   );
 
   try {
-    // 2. Get the authorized Google Sheets API client
     const sheets = await getSheetsClient();
 
-    // 3. Format the lead data into a row (array of values)
-    // IMPORTANT: The order here *must* match the column order in your sheet.
+    // --- NEW LOGIC: Check for header row ---
+    // 1. Check if cell A1 in the specified sheet (tab) is empty.
+    const headerCheck = await sheets.spreadsheets.values.get({
+      spreadsheetId: sheetId,
+      range: `${sheetName}!A1:A1`, // Check only the very first cell
+    });
+
+    // 2. If the 'values' array is missing, the sheet is empty.
+    const headerExists = headerCheck.data.values && headerCheck.data.values.length > 0;
+
+    if (!headerExists) {
+      // 3. If no header, append our HEADER_ROW first.
+      logger.info(`Google Sheets: No header found in '${sheetName}'. Creating one...`);
+      await sheets.spreadsheets.values.append({
+        spreadsheetId: sheetId,
+        range: `${sheetName}!A1`, // Start at A1
+        valueInputOption: 'USER_ENTERED',
+        resource: {
+          values: [HEADER_ROW], // Note the double array
+        },
+      });
+    }
+    // --- END NEW LOGIC ---
+
+
+    // 4. Format the lead data row (this order must match HEADER_ROW)
     const row = [
-      lead.timestampUae.toISOString(), // Use the virtual UAE timestamp
+      lead.timestampUae.toISOString(),
+      lead.leadId ? `LEAD#${lead.leadId}` : 'N/A',
       lead.name || 'N/A',
-      lead.phone,
+      lead.phone || 'N/A',
       lead.email || 'N/A',
+      lead.userType || 'N/A',
+      lead.propertyType || 'N/A',
+      lead.budget || 'N/A',
+      lead.bedrooms || 'N/A',
       lead.source || 'N/A',
       lead.siteName || 'N/A',
       lead.formName || 'N/A',
@@ -49,26 +95,25 @@ export const appendLeadToSheet = async (lead, sourceConfig) => {
       lead.utm?.campaign || 'N/A',
       lead.utm?.term || 'N/A',
       lead.utm?.content || 'N/A',
-      lead._id.toString(), // Add Lead ID for reference
+      lead._id.toString(),
     ];
 
-    // 4. Append the row to the sheet
+    // 5. Append the actual lead data row
     await sheets.spreadsheets.values.append({
       spreadsheetId: sheetId,
-      range: `${sheetName}!A1`, // Append to the first empty row
-      valueInputOption: 'USER_ENTERED', // Interprets data like formulas, dates
+      range: `${sheetName}!A1`, // Append to the first empty row (after header)
+      valueInputOption: 'USER_ENTERED',
       resource: {
-        values: [row], // The data must be an array of arrays
+        values: [row],
       },
     });
 
-    logger.info(`Google Sheets: Successfully appended lead ${lead._id}.`);
+    logger.info(`Google Sheets: Successfully appended lead ${lead.leadId || lead._id}.`);
     return true;
   } catch (error) {
     logger.error(
-      `Google Sheets: FAILED to append lead ${lead._id}. Error: ${error.message}`
+      `Google Sheets: FAILED to append lead ${lead.leadId || lead._id}. Error: ${error.message}`
     );
-    // Log this failure to our ErrorLog collection
     await ErrorLog.create({
       lead: lead._id,
       source: lead.sourceId,

@@ -26,6 +26,14 @@ const normalizeSnapchatPayload = (body) => {
 
   if (!name) name = "N/A";
 
+  // --- ADDED: New variables ---
+  // (Snapchat usually uses the field name as the key)
+  let userType = lead.user_type || lead.investor || null;
+  let propertyType = lead.property_type || lead.property || null;
+  let budget = lead.budget || null;
+  let bedrooms = lead.bedrooms || lead.beds || null;
+  // --- END ADDED ---
+
   return {
     name,
     email,
@@ -35,23 +43,28 @@ const normalizeSnapchatPayload = (body) => {
     adName: ad.ad_name || "N/A",
     adSetName: ad.ad_squad_name || "N/A", // Snapchat calls ad sets "squads"
     timestamp: body.lead?.created_at,
+    userType,
+    propertyType,
+    budget,
+    bedrooms,
   };
 };
 
 /**
  * Handle Snapchat webhook — respond instantly, process asynchronously.
+ * (This function is unchanged)
  */
 export const handleSnapchatWebhook = async (req, res) => {
   const source = req.source;
   const body = req.body;
 
-  // ✅ Respond immediately (200 OK is required by Snapchat)
+  // ✅ Respond immediately
   res.status(HTTP_STATUS.OK).json({
     success: true,
     message: "Webhook received successfully.",
   });
 
-  // 🔄 Process the payload asynchronously (after sending response)
+  // 🔄 Process the payload asynchronously
   processSnapchatLead(source, body).catch((err) => {
     logger.error("Async Snapchat processing failed:", err.message);
   });
@@ -78,7 +91,7 @@ const processSnapchatLead = async (source, body) => {
       return;
     }
 
-    // 3️⃣ Create new lead
+    // 3️⃣ Create new lead (NOW INCLUDES NEW FIELDS)
     const newLead = new Lead({
       name: normalized.name,
       email: normalized.email,
@@ -87,6 +100,14 @@ const processSnapchatLead = async (source, body) => {
       campaignName: normalized.campaignName,
       adName: normalized.adName,
       adSetName: normalized.adSetName,
+      
+      // --- ADDED ---
+      userType: normalized.userType,
+      propertyType: normalized.propertyType,
+      budget: normalized.budget,
+      bedrooms: normalized.bedrooms,
+      // --- END ADDED ---
+
       source: LEAD_SOURCES.SNAPCHAT,
       sourceId: source._id,
       siteName: source.name,
@@ -97,20 +118,20 @@ const processSnapchatLead = async (source, body) => {
 
     await newLead.save();
 
-    // 4️⃣ Queue background jobs
+    // 4️⃣ Queue background jobs (Unchanged)
     await Job.insertMany([
       { lead: newLead._id, type: JOB_TYPES.APPEND_TO_SHEETS, status: "QUEUED" },
       { lead: newLead._id, type: JOB_TYPES.PUSH_TO_BITRIX, status: "QUEUED" },
     ]);
 
-    // 5️⃣ Increment source's lead count
+    // 5️⃣ Increment source's lead count (Unchanged)
     await Source.updateOne({ _id: source._id }, { $inc: { leadCount: 1 } });
 
     logger.info(
-      `✅ Lead ${newLead._id} created successfully from Snapchat (${source.name}).`
+      `✅ Lead ${newLead._id} (ID: ${newLead.leadId}) created successfully from Snapchat (${source.name}).`
     );
   } catch (error) {
-    // 6️⃣ Handle unexpected errors
+    // 6️⃣ Handle unexpected errors (Unchanged)
     logger.error("❌ Failed to process Snapchat webhook:", {
       message: error.message,
       stack: error.stack,

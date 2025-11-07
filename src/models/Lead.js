@@ -10,6 +10,35 @@ const { Schema } = mongoose;
  */
 const leadSchema = new Schema(
   {
+    // --- Human-Readable ID (from last step) ---
+    leadId: {
+      type: Number,
+      unique: true,
+    },
+    
+    // --- NEW SPECIFIC FIELDS ---
+    // (We replaced 'leadType' with these)
+    userType: { // e.g., 'investor'
+      type: String,
+      trim: true,
+      default: null,
+    },
+    propertyType: { // e.g., 'Apartments'
+      type: String,
+      trim: true,
+      default: null,
+    },
+    budget: { // e.g., '1M - 2M'
+      type: String,
+      trim: true,
+      default: null,
+    },
+    bedrooms: { // e.g., '1', '2', '3 Bedroom'
+      type: String,
+      trim: true,
+      default: null,
+    },
+    // --- END NEW FIELDS ---
     // --- Source & Tracking ---
     source: {
       type: String,
@@ -146,6 +175,12 @@ leadSchema.pre('validate', function(next) {
   }
 });
 // --- END NEW RULE ---
+// --- (Mongoose-Sequence plugin is unchanged) ...
+leadSchema.plugin(AutoIncrement, {
+  id: 'lead_id_counter',
+  inc_field: 'leadId',
+  start_seq: 1001,
+});
 
 
 const Lead = mongoose.model('Lead', leadSchema);
