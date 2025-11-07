@@ -2,6 +2,7 @@ import mongoose from 'mongoose';
 import { LEAD_SOURCES, LEAD_STATUSES } from '../utils/constants.js';
 
 const { Schema } = mongoose;
+const AutoIncrement = MongooseSequence(mongoose);
 
 /**
  * This is the central model for all incoming leads.
