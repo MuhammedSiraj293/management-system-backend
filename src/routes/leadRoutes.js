@@ -3,6 +3,7 @@ import {
   getAllLeads,
   createLead,
   retryLeadJobs,
+  getLeadById,
 } from '../controllers/leadController.js';
 import { authMiddleware } from '../middlewares/authMiddleware.js'; // We'll create this soon
 
