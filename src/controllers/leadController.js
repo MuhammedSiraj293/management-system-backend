@@ -49,7 +49,7 @@ const getDateRangeFilter = (queryParams) => {
   return Object.keys(createdAtFilter).length > 0 ? createdAtFilter : null;
 };
 
-/**
+/** 
  * Fetches all leads with pagination, filtering, and sorting.
  * This is the main endpoint for the 'Leads' page on the frontend.
  */
