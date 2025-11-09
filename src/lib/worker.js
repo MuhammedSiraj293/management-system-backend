@@ -71,6 +71,35 @@ export const processNextJob = async () => {
         { $set: { status: 'COMPLETED' } }
       );
       logger.info(`Job ${job.type} for lead ${lead._id} COMPLETED.`);
+
+      // --- NEW LOGIC ADDED ---
+      // After completing a job, check if all jobs for this lead are done
+      const pendingJobs = await Job.countDocuments({
+        lead: lead._id,
+        status: { $in: ['QUEUED', 'PROCESSING'] }, // Are any jobs still running/queued?
+      });
+
+      if (pendingJobs === 0) {
+        // No jobs are pending. Check if any failed.
+        const failedJobs = await Job.countDocuments({
+          lead: lead._id,
+          status: 'FAILED',
+        });
+
+        if (failedJobs === 0) {
+          // No jobs pending, none failed. The lead is a SUCCESS.
+          logger.info(
+            `All jobs for lead ${lead._id} are complete. Marking lead as SUCCESS.`
+          );
+          await Lead.updateOne(
+            { _id: lead._id },
+            { $set: { status: LEAD_STATUSES.SUCCESS } }
+          );
+        }
+        // If failedJobs > 0, the retry logic has already
+        // set the lead status to FAILED, so we do nothing.
+      }
+      // --- END NEW LOGIC ---
     } else {
       throw new Error(`Handler for job ${job.type} returned false.`);
     }
@@ -96,9 +125,11 @@ export const processNextJob = async () => {
         );
       } else {
         logger.error(`Job ${job._id} FAILED permanently after ${MAX_ATTEMPTS} attempts.`);
+        // --- THIS IS THE CRITICAL LINE FOR FAILED LEADS ---
+        // If a job fails permanently, mark the *parent lead* as FAILED.
         await Lead.updateOne(
           { _id: job.lead._id },
-          { status: LEAD_STATUSES.FAILED }
+          { $set: { status: LEAD_STATUSES.FAILED } }
         );
       }
 
@@ -116,5 +147,3 @@ export const processNextJob = async () => {
     return false; // Job processing failed
   }
 };
-
-// --- We have REMOVED the startWorker() and while(true) loop ---
